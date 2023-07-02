@@ -205,6 +205,7 @@ func validateDigest(r *http.Request, digest string) bool {
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("Failed to read request body: %v", err)
 		return false
 	}
 	r.Body = ioutil.NopCloser(bytes.NewReader(body)) // Reset the request body
@@ -216,11 +217,19 @@ func validateDigest(r *http.Request, digest string) bool {
 	return expectedDigest == digest
 }
 
-func main() {
+func setupRoutes() {
 	http.HandleFunc("/wallets/check", checkWalletExistsHandler)
 	http.HandleFunc("/wallets/deposit", depositToWalletHandler)
 	http.HandleFunc("/wallets/operations", getMonthlyOperationsHandler)
 	http.HandleFunc("/wallets/balance", getWalletBalanceHandler)
+}
 
+func startServer() {
+	log.Println("Starting server on port 8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func main() {
+	setupRoutes()
+	startServer()
 }
