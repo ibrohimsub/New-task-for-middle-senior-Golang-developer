@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -56,15 +57,6 @@ const (
 	transactionDateFormat = "2006-01-02T15:04:05Z07:00"
 )
 
-func main() {
-	http.HandleFunc("/wallets/check", checkWalletExistsHandler)
-	http.HandleFunc("/wallets/deposit", depositToWalletHandler)
-	http.HandleFunc("/wallets/operations", getMonthlyOperationsHandler)
-	http.HandleFunc("/wallets/balance", getWalletBalanceHandler)
-
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-
 func checkWalletExistsHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
 	digest := r.Header.Get("X-Digest")
@@ -100,8 +92,12 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var depositAmount float64
-		err = json.Unmarshal(body, &depositAmount)
+		type DepositRequest struct {
+			Amount float64 `json:"amount"`
+		}
+
+		var req DepositRequest
+		err = json.Unmarshal(body, &req)
 		if err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -113,24 +109,24 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if wallet.Identified && wallet.Balance+depositAmount > maxBalanceIdentified {
+		if wallet.Identified && wallet.Balance+req.Amount > maxBalanceIdentified {
 			http.Error(w, "Exceeded maximum balance for identified wallets", http.StatusBadRequest)
 			return
 		}
 
-		if !wallet.Identified && wallet.Balance+depositAmount > maxBalanceUnidentified {
+		if !wallet.Identified && wallet.Balance+req.Amount > maxBalanceUnidentified {
 			http.Error(w, "Exceeded maximum balance for unidentified wallets", http.StatusBadRequest)
 			return
 		}
 
-		wallet.Balance += depositAmount
+		wallet.Balance += req.Amount
 		wallets.data[userId] = wallet
 
 		// Add transaction to the transactions map
 		transaction := Transaction{
 			ID:        uuid.New().String(),
 			WalletID:  userId,
-			Amount:    depositAmount,
+			Amount:    req.Amount,
 			Timestamp: time.Now(),
 		}
 		transactions.Lock()
@@ -218,4 +214,13 @@ func validateDigest(r *http.Request, digest string) bool {
 	expectedDigest := hex.EncodeToString(h.Sum(nil))
 
 	return expectedDigest == digest
+}
+
+func main() {
+	http.HandleFunc("/wallets/check", checkWalletExistsHandler)
+	http.HandleFunc("/wallets/deposit", depositToWalletHandler)
+	http.HandleFunc("/wallets/operations", getMonthlyOperationsHandler)
+	http.HandleFunc("/wallets/balance", getWalletBalanceHandler)
+
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
