@@ -18,16 +18,16 @@ import (
 )
 
 type Wallet struct {
-	ID         string
-	Balance    float64
-	Identified bool
+	ID         string  `json:"id"`
+	Balance    float64 `json:"balance"`
+	Identified bool    `json:"identified"`
 }
 
 type Transaction struct {
-	ID         string
-	WalletID   string
-	Amount     float64
-	Timestamp  time.Time
+	ID         string    `json:"id"`
+	WalletID   string    `json:"walletId"`
+	Amount     float64   `json:"amount"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 var (
@@ -42,10 +42,7 @@ var (
 		sync.RWMutex
 		data map[string]Wallet
 	}{
-		data: map[string]Wallet{
-			"1": {ID: "1", Balance: 10000, Identified: false},
-			"2": {ID: "2", Balance: 100000, Identified: true},
-		},
+		data: make(map[string]Wallet),
 	}
 
 	maxBalanceIdentified   = 100000.0
