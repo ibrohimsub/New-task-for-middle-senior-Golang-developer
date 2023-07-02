@@ -16,6 +16,15 @@ type Wallet struct {
 	Identified bool
 }
 
+type Transaction struct {
+	ID         string
+	WalletID   string
+	Amount     float64
+	Timestamp  time.Time
+}
+
+var transactions = map[string][]Transaction{}
+
 var wallets = map[string]Wallet{
 	"1": {ID: "1", Balance: 10000, Identified: false},
 	"2": {ID: "2", Balance: 100000, Identified: true},
@@ -85,6 +94,15 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 		wallet.Balance += depositAmount
 		wallets[userId] = wallet
 
+		// Add transaction to the transactions map
+		transaction := Transaction{
+			ID:        uuid.New().String(),
+			WalletID:  userId,
+			Amount:    depositAmount,
+			Timestamp: time.Now(),
+		}
+		transactions[userId] = append(transactions[userId], transaction)
+
 		walletJSON, _ := json.Marshal(wallet)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(walletJSON)
@@ -93,17 +111,44 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+
 func getMonthlyOperationsHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
 	digest := r.Header.Get("X-Digest")
 
 	if validateDigest(r.Body, digest) {
-		// Здесь можно реализовать логику для получения общего количества и суммы операций пополнения за текущий месяц
-		// Возвращение результата в формате JSON
+		// Get transactions for the user
+		userTransactions := transactions[userId]
+
+		// Calculate total count and sum of deposits for the current month
+		var totalCount int
+		var totalSum float64
+
+		currentMonth := time.Now().Month()
+		for _, transaction := range userTransactions {
+			if transaction.Timestamp.Month() == currentMonth {
+				totalCount++
+				totalSum += transaction.Amount
+			}
+		}
+
+		// Prepare the response JSON
+		response := struct {
+			Count int     `json:"count"`
+			Sum   float64 `json:"sum"`
+		}{
+			Count: totalCount,
+			Sum:   totalSum,
+		}
+
+		responseJSON, _ := json.Marshal(response)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(responseJSON)
 	} else {
 		http.Error(w, "Invalid digest", http.StatusUnauthorized)
 	}
 }
+
 
 func getWalletBalanceHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
