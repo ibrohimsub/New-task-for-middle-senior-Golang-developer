@@ -2,12 +2,15 @@ package main
 
 import (
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,24 +29,38 @@ type Transaction struct {
 	Timestamp  time.Time
 }
 
-var transactions = map[string][]Transaction{}
+var (
+	transactions = struct {
+		sync.RWMutex
+		data map[string][]Transaction
+	}{
+		data: make(map[string][]Transaction),
+	}
 
-var wallets = map[string]Wallet{
-	"1": {ID: "1", Balance: 10000, Identified: false},
-	"2": {ID: "2", Balance: 100000, Identified: true},
-}
+	wallets = struct {
+		sync.RWMutex
+		data map[string]Wallet
+	}{
+		data: map[string]Wallet{
+			"1": {ID: "1", Balance: 10000, Identified: false},
+			"2": {ID: "2", Balance: 100000, Identified: true},
+		},
+	}
 
-const (
 	maxBalanceIdentified   = 100000.0
 	maxBalanceUnidentified = 10000.0
 	secretKey              = "your-secret-key"
 )
 
+const (
+	transactionDateFormat = "2006-01-02T15:04:05Z07:00"
+)
+
 func main() {
-	http.HandleFunc("/wallet/check", checkWalletExistsHandler)
-	http.HandleFunc("/wallet/deposit", depositToWalletHandler)
-	http.HandleFunc("/wallet/operations", getMonthlyOperationsHandler)
-	http.HandleFunc("/wallet/balance", getWalletBalanceHandler)
+	http.HandleFunc("/wallets/check", checkWalletExistsHandler)
+	http.HandleFunc("/wallets/deposit", depositToWalletHandler)
+	http.HandleFunc("/wallets/operations", getMonthlyOperationsHandler)
+	http.HandleFunc("/wallets/balance", getWalletBalanceHandler)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
@@ -52,8 +69,11 @@ func checkWalletExistsHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
 	digest := r.Header.Get("X-Digest")
 
-	if validateDigest(r.Body, digest) {
-		wallet, found := wallets[userId]
+	if validateDigest(r, digest) {
+		wallets.RLock()
+		defer wallets.RUnlock()
+
+		wallet, found := wallets.data[userId]
 		if found {
 			walletJSON, _ := json.Marshal(wallet)
 			w.Header().Set("Content-Type", "application/json")
@@ -70,15 +90,24 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
 	digest := r.Header.Get("X-Digest")
 
-	if validateDigest(r.Body, digest) {
+	if validateDigest(r, digest) {
+		wallets.Lock()
+		defer wallets.Unlock()
+
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read request body", http.StatusBadRequest)
+			return
+		}
+
 		var depositAmount float64
-		err := json.NewDecoder(r.Body).Decode(&depositAmount)
+		err = json.Unmarshal(body, &depositAmount)
 		if err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
 
-		wallet, found := wallets[userId]
+		wallet, found := wallets.data[userId]
 		if !found {
 			http.Error(w, "Wallet not found", http.StatusNotFound)
 			return
@@ -95,7 +124,7 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		wallet.Balance += depositAmount
-		wallets[userId] = wallet
+		wallets.data[userId] = wallet
 
 		// Add transaction to the transactions map
 		transaction := Transaction{
@@ -104,7 +133,9 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 			Amount:    depositAmount,
 			Timestamp: time.Now(),
 		}
-		transactions[userId] = append(transactions[userId], transaction)
+		transactions.Lock()
+		transactions.data[userId] = append(transactions.data[userId], transaction)
+		transactions.Unlock()
 
 		walletJSON, _ := json.Marshal(wallet)
 		w.Header().Set("Content-Type", "application/json")
@@ -114,20 +145,20 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
 func getMonthlyOperationsHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
 	digest := r.Header.Get("X-Digest")
 
-	if validateDigest(r.Body, digest) {
-		// Get transactions for the user
-		userTransactions := transactions[userId]
+	if validateDigest(r, digest) {
+		transactions.RLock()
+		userTransactions := transactions.data[userId]
+		transactions.RUnlock()
 
 		// Calculate total count and sum of deposits for the current month
-		var totalCount int
-		var totalSum float64
-
 		currentMonth := time.Now().Month()
+		totalCount := 0
+		totalSum := 0.0
+
 		for _, transaction := range userTransactions {
 			if transaction.Timestamp.Month() == currentMonth {
 				totalCount++
@@ -152,13 +183,15 @@ func getMonthlyOperationsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
 func getWalletBalanceHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("X-UserId")
 	digest := r.Header.Get("X-Digest")
 
-	if validateDigest(r.Body, digest) {
-		wallet, found := wallets[userId]
+	if validateDigest(r, digest) {
+		wallets.RLock()
+		defer wallets.RUnlock()
+
+		wallet, found := wallets.data[userId]
 		if found {
 			balanceJSON, _ := json.Marshal(map[string]float64{"balance": wallet.Balance})
 			w.Header().Set("Content-Type", "application/json")
@@ -171,9 +204,17 @@ func getWalletBalanceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func validateDigest(data []byte, digest string) bool {
-	h := hmac.New(sha1.New, []byte(secretKey))
-	h.Write(data)
+func validateDigest(r *http.Request, digest string) bool {
+	r.Body = http.MaxBytesReader(nil, r.Body, 1048576) // Set max body size to 1MB
+
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	r.Body = ioutil.NopCloser(bytes.NewReader(body)) // Reset the request body
+
+	h := hmac.New(sha256.New, []byte(secretKey))
+	h.Write(body)
 	expectedDigest := hex.EncodeToString(h.Sum(nil))
 
 	return expectedDigest == digest
