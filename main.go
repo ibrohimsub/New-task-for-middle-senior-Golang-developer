@@ -217,11 +217,42 @@ func validateDigest(r *http.Request, digest string) bool {
 	return expectedDigest == digest
 }
 
+func createWalletHandler(w http.ResponseWriter, r *http.Request) {
+	userId := r.Header.Get("X-UserId")
+	digest := r.Header.Get("X-Digest")
+
+	if validateDigest(r, digest) {
+		wallets.Lock()
+		defer wallets.Unlock()
+
+		_, found := wallets.data[userId]
+		if found {
+			http.Error(w, "Wallet already exists", http.StatusBadRequest)
+			return
+		}
+
+		// Create a new wallet with a balance of 0
+		wallet := Wallet{
+			ID:         userId,
+			Balance:    0.0,
+			Identified: false,
+		}
+		wallets.data[userId] = wallet
+
+		walletJSON, _ := json.Marshal(wallet)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(walletJSON)
+	} else {
+		http.Error(w, "Invalid digest", http.StatusUnauthorized)
+	}
+}
+
 func setupRoutes() {
 	http.HandleFunc("/wallets/check", checkWalletExistsHandler)
 	http.HandleFunc("/wallets/deposit", depositToWalletHandler)
 	http.HandleFunc("/wallets/operations", getMonthlyOperationsHandler)
 	http.HandleFunc("/wallets/balance", getWalletBalanceHandler)
+	http.HandleFunc("/wallets/create", createWalletHandler)
 }
 
 func startServer() {
