@@ -6,11 +6,9 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -64,7 +62,11 @@ func checkWalletExistsHandler(w http.ResponseWriter, r *http.Request) {
 
 		wallet, found := wallets.data[userId]
 		if found {
-			walletJSON, _ := json.Marshal(wallet)
+			walletJSON, err := json.Marshal(wallet)
+			if err != nil {
+				http.Error(w, "Failed to serialize wallet", http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(walletJSON)
 		} else {
@@ -130,7 +132,11 @@ func depositToWalletHandler(w http.ResponseWriter, r *http.Request) {
 		transactions.data[userId] = append(transactions.data[userId], transaction)
 		transactions.Unlock()
 
-		walletJSON, _ := json.Marshal(wallet)
+		walletJSON, err := json.Marshal(wallet)
+		if err != nil {
+			http.Error(w, "Failed to serialize wallet", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(walletJSON)
 	} else {
@@ -186,7 +192,11 @@ func getWalletBalanceHandler(w http.ResponseWriter, r *http.Request) {
 
 		wallet, found := wallets.data[userId]
 		if found {
-			balanceJSON, _ := json.Marshal(map[string]float64{"balance": wallet.Balance})
+			balanceJSON, err := json.Marshal(map[string]float64{"balance": wallet.Balance})
+			if err != nil {
+				http.Error(w, "Failed to serialize balance", http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(balanceJSON)
 		} else {
@@ -195,23 +205,6 @@ func getWalletBalanceHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "Invalid digest", http.StatusUnauthorized)
 	}
-}
-
-func validateDigest(r *http.Request, digest string) bool {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1048576) // Set max body size to 1MB
-
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Failed to read request body: %v", err)
-		return false
-	}
-	r.Body = ioutil.NopCloser(bytes.NewReader(body)) // Reset the request body
-
-	h := hmac.New(sha1.New, []byte(secretKey))
-	h.Write(body)
-	expectedDigest := hex.EncodeToString(h.Sum(nil))
-
-	return expectedDigest == digest
 }
 
 func createWalletHandler(w http.ResponseWriter, r *http.Request) {
@@ -236,12 +229,31 @@ func createWalletHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		wallets.data[userId] = wallet
 
-		walletJSON, _ := json.Marshal(wallet)
+		walletJSON, err := json.Marshal(wallet)
+		if err != nil {
+			http.Error(w, "Failed to serialize wallet", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(walletJSON)
 	} else {
 		http.Error(w, "Invalid digest", http.StatusUnauthorized)
 	}
+}
+
+func validateDigest(r *http.Request, digest string) bool {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Failed to read request body: %v", err)
+		return false
+	}
+	r.Body = ioutil.NopCloser(bytes.NewReader(body)) // Reset the request body
+
+	h := hmac.New(sha1.New, []byte(secretKey))
+	h.Write(body)
+	expectedDigest := hex.EncodeToString(h.Sum(nil))
+
+	return expectedDigest == digest
 }
 
 func setupRoutes() {
