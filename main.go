@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type Wallet struct {
