@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -210,7 +210,7 @@ func validateDigest(r *http.Request, digest string) bool {
 	}
 	r.Body = ioutil.NopCloser(bytes.NewReader(body)) // Reset the request body
 
-	h := hmac.New(sha256.New, []byte(secretKey))
+	h := hmac.New(sha1.New, []byte(secretKey))
 	h.Write(body)
 	expectedDigest := hex.EncodeToString(h.Sum(nil))
 
